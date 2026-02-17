@@ -21,7 +21,6 @@ TIMEZONE = pytz.timezone("America/Sao_Paulo")
 ARQUIVO_ESTADO = "estado.json"
 
 intents = discord.Intents.default()
-intents.message_content = True
 bot = discord.Client(intents=intents)
 
 lock = asyncio.Lock()
@@ -64,24 +63,15 @@ def salvar_estado(estado):
 estado = carregar_estado()
 
 # ===============================
-# EMBEDS
+# EMBED
 # ===============================
 
-def criar_embed(nome, local, hora, tipo):
-    if tipo == "5min":
-        titulo = f"🔥 BOSS {nome} EM 5 MINUTOS! 🔥"
-        cor = 0xffa500
-    else:
-        titulo = f"🔥 BOSS {nome} NASCEU! 🔥"
-        cor = 0xff0000
-
-    embed = discord.Embed(
-        title=titulo,
+def criar_embed(nome, local, hora):
+    return discord.Embed(
+        title=f"🔥 BOSS {nome} EM 10 MINUTOS! 🔥",
         description=f"Horário - {hora}\nLocal - {local}",
-        color=cor
+        color=0xffa500
     )
-
-    return embed
 
 # ===============================
 # LOOP PRINCIPAL
@@ -125,24 +115,20 @@ async def verificar_boss():
                 hora_boss += timedelta(days=1)
 
             diferenca = (hora_boss - agora).total_seconds()
+            chave = f"{nome}_{horario}_10"
 
-            chave_5 = f"{nome}_{horario}_5"
-            chave_spawn = f"{nome}_{horario}_spawn"
+            if 0 < diferenca <= 600:
+                if not estado.get(chave):
 
-            # Aviso 5 minutos antes
-            if 0 < diferenca <= 300:
-                if not estado.get(chave_5):
-                    embed = criar_embed(nome, local, horario, "5min")
-                    await canal.send("@everyone", embed=embed)
-                    estado[chave_5] = True
-                    salvar_estado(estado)
+                    embed = criar_embed(nome, local, horario)
 
-            # Aviso no horário
-            if -30 <= diferenca <= 30:
-                if not estado.get(chave_spawn):
-                    embed = criar_embed(nome, local, horario, "spawn")
-                    await canal.send("@everyone", embed=embed)
-                    estado[chave_spawn] = True
+                    await canal.send(
+                        content="@everyone",
+                        embed=embed,
+                        allowed_mentions=discord.AllowedMentions(everyone=True)
+                    )
+
+                    estado[chave] = True
                     salvar_estado(estado)
 
 # ===============================
