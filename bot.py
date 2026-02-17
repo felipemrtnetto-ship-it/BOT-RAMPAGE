@@ -9,7 +9,7 @@ import traceback
 import time
 
 # ===============================
-# TOKEN SEGURO VIA RAILWAY
+# TOKEN VIA VARIÁVEL DE AMBIENTE
 # ===============================
 
 TOKEN = os.getenv("TOKEN")
@@ -35,7 +35,7 @@ ultimo_minuto_processado = None
 mensagem_fixa = None
 
 # ===============================
-# LOG PROFISSIONAL
+# LOG
 # ===============================
 
 def log(msg):
@@ -43,7 +43,7 @@ def log(msg):
     print(f"[{agora}] {msg}")
 
 # ===============================
-# SALVAR ESTADO
+# ESTADO
 # ===============================
 
 def carregar_estado():
@@ -63,7 +63,7 @@ avisados = carregar_estado()
 # ===============================
 
 bosses = [
-    ("02:28", "Galia Black", "Lost Tower (165, 76)"),
+    ("10:45", "Galia Black", "Lost Tower (165, 76)"),
     ("13:10", "Kundun", "Kalima 6 - Lost Map +6"),
     ("15:10", "Kundun", "Kalima 6 - Lost Map +6"),
     ("16:45", "Galia Black", "Lost Tower (165, 76)"),
@@ -89,16 +89,41 @@ def criar_embed(nome, local, horario, status, tempo=None):
         "PRÓXIMO": 0x00bfff
     }
 
-    embed = discord.Embed(
-        title=f"🔥 BOSS {nome} {status}! 🔥",
-        color=cores.get(status, 0xffffff)
-    )
+    if status == "PRÓXIMO":
+        descricao = (
+            f"**Horário - {horario}**\n"
+            f"**Local - {local}**\n\n"
+            f"💪 **PEGUE BUFF E ENTRE NA PT!**"
+        )
 
-    embed.add_field(name="🕒 Horário", value=f"**{horario}**", inline=False)
-    embed.add_field(name="📍 Local", value=f"**{local}**", inline=False)
+        embed = discord.Embed(
+            title=f"🔥 PROXIMO BOSS É O {nome} 🔥",
+            description=descricao,
+            color=cores["PRÓXIMO"]
+        )
 
-    if tempo:
-        embed.add_field(name="⏳ Tempo Restante", value=f"**{tempo}**", inline=False)
+        if tempo:
+            embed.add_field(
+                name="⏳ Tempo Restante",
+                value=f"**{tempo}**",
+                inline=False
+            )
+    elif status == "EM 5 MINUTOS":
+        descricao = f"**Horário - {horario}**\n**Local - {local}**"
+
+        embed = discord.Embed(
+            title=f"🔥 BOSS {nome} EM 5 MINUTOS! 🔥",
+            description=descricao,
+            color=cores["EM 5 MINUTOS"]
+        )
+    else:
+        descricao = f"**Horário - {horario}**\n**Local - {local}**"
+
+        embed = discord.Embed(
+            title=f"🔥 BOSS {nome} NASCEU! 🔥",
+            description=descricao,
+            color=cores["NASCEU"]
+        )
 
     embed.set_footer(text="Sistema Automático ULTRA • MU Online")
     return embed
@@ -133,7 +158,7 @@ def calcular_proximo_boss():
 
 @bot.event
 async def on_ready():
-    log(f"🛡️ Bot ULTRA online como {bot.user}")
+    log(f"🛡️ Bot online como {bot.user}")
 
     if not verificar_boss.is_running():
         verificar_boss.start()
@@ -142,66 +167,44 @@ async def on_ready():
         atualizar_painel.start()
 
 # ===============================
-# ERRO GLOBAL
-# ===============================
-
-@bot.event
-async def on_error(event, *args, **kwargs):
-    log(f"❌ ERRO GLOBAL no evento {event}")
-    traceback.print_exc()
-
-# ===============================
-# SISTEMA DE AVISO (ANTI DUPLO ENVIO)
+# VERIFICAR BOSSES
 # ===============================
 
 @tasks.loop(seconds=30)
 async def verificar_boss():
     global ultimo_minuto_processado
 
-    try:
-        async with lock_envio:
+    async with lock_envio:
+        agora = datetime.now(FUSO)
+        minuto_atual = agora.strftime("%Y-%m-%d %H:%M")
 
-            agora = datetime.now(FUSO)
-            minuto_atual = agora.strftime("%Y-%m-%d %H:%M")
+        if ultimo_minuto_processado == minuto_atual:
+            return
 
-            if ultimo_minuto_processado == minuto_atual:
-                return
+        ultimo_minuto_processado = minuto_atual
 
-            ultimo_minuto_processado = minuto_atual
+        hora_atual = agora.strftime("%H:%M")
+        hora_menos5 = (agora + timedelta(minutes=5)).strftime("%H:%M")
 
-            hora_atual = agora.strftime("%H:%M")
-            hora_menos5 = (agora + timedelta(minutes=5)).strftime("%H:%M")
+        canal = discord.utils.get(bot.get_all_channels(), name=CANAL_NOME)
+        if not canal:
+            return
 
-            canal = discord.utils.get(bot.get_all_channels(), name=CANAL_NOME)
-            if not canal:
-                return
+        for horario, nome, local in bosses:
 
-            for horario, nome, local in bosses:
-
-                if hora_menos5 == horario and f"5_{horario}" not in avisados:
-                    embed = criar_embed(nome, local, horario, "EM 5 MINUTOS")
-                    await canal.send("@everyone", embed=embed)
-                    avisados.add(f"5_{horario}")
-                    salvar_estado()
-                    log(f"⏰ Aviso 5 min enviado para {nome}")
-                    return
-
-                if hora_atual == horario and f"0_{horario}" not in avisados:
-                    embed = criar_embed(nome, local, horario, "NASCEU")
-                    await canal.send("@everyone", embed=embed)
-                    avisados.add(f"0_{horario}")
-                    salvar_estado()
-                    log(f"🔥 Boss {nome} nasceu")
-                    return
-
-            if hora_atual == "03:00":
-                avisados.clear()
+            if hora_menos5 == horario and f"5_{horario}" not in avisados:
+                embed = criar_embed(nome, local, horario, "EM 5 MINUTOS")
+                await canal.send("@everyone", embed=embed)
+                avisados.add(f"5_{horario}")
                 salvar_estado()
-                log("♻️ Reset diário executado")
+                return
 
-    except Exception:
-        log("❌ Erro na task verificar_boss")
-        traceback.print_exc()
+            if hora_atual == horario and f"0_{horario}" not in avisados:
+                embed = criar_embed(nome, local, horario, "NASCEU")
+                await canal.send("@everyone", embed=embed)
+                avisados.add(f"0_{horario}")
+                salvar_estado()
+                return
 
 # ===============================
 # PAINEL FIXO
@@ -211,37 +214,32 @@ async def verificar_boss():
 async def atualizar_painel():
     global mensagem_fixa
 
-    try:
-        canal = discord.utils.get(bot.get_all_channels(), name=CANAL_NOME)
-        if not canal:
-            return
+    canal = discord.utils.get(bot.get_all_channels(), name=CANAL_NOME)
+    if not canal:
+        return
 
-        diferenca, nome, local, hora_boss = calcular_proximo_boss()
+    diferenca, nome, local, hora_boss = calcular_proximo_boss()
 
-        total = int(diferenca.total_seconds())
-        horas, resto = divmod(total, 3600)
-        minutos, segundos = divmod(resto, 60)
-        tempo = f"{horas:02d}h {minutos:02d}m {segundos:02d}s"
+    total = int(diferenca.total_seconds())
+    horas, resto = divmod(total, 3600)
+    minutos, segundos = divmod(resto, 60)
+    tempo = f"{horas:02d}h {minutos:02d}m {segundos:02d}s"
 
-        embed = criar_embed(
-            nome,
-            local,
-            hora_boss.strftime("%H:%M"),
-            "PRÓXIMO",
-            tempo
-        )
+    embed = criar_embed(
+        nome,
+        local,
+        hora_boss.strftime("%H:%M"),
+        "PRÓXIMO",
+        tempo
+    )
 
-        if mensagem_fixa is None:
-            mensagem_fixa = await canal.send(embed=embed)
-        else:
-            await mensagem_fixa.edit(embed=embed)
-
-    except Exception:
-        log("❌ Erro na task atualizar_painel")
-        traceback.print_exc()
+    if mensagem_fixa is None:
+        mensagem_fixa = await canal.send(embed=embed)
+    else:
+        await mensagem_fixa.edit(embed=embed)
 
 # ===============================
-# START ULTRA ESTÁVEL (RAILWAY OK)
+# START ULTRA (RAILWAY OK)
 # ===============================
 
 if __name__ == "__main__":
@@ -249,5 +247,5 @@ if __name__ == "__main__":
         try:
             bot.run(TOKEN)
         except Exception:
-            log("⚠️ Conexão perdida. Reconectando em 10 segundos...")
+            log("⚠️ Reconectando em 10 segundos...")
             time.sleep(10)
