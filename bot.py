@@ -5,11 +5,11 @@ from datetime import datetime, timedelta
 import pytz
 import json
 import asyncio
-import sys
 import traceback
+import time
 
 # ===============================
-# TOKEN SEGURO
+# TOKEN SEGURO VIA RAILWAY
 # ===============================
 
 TOKEN = os.getenv("TOKEN")
@@ -23,6 +23,7 @@ if not TOKEN:
 
 intents = discord.Intents.default()
 intents.message_content = True
+
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 CANAL_NOME = "⚠️-alerta-dos-boss"
@@ -141,7 +142,7 @@ async def on_ready():
         atualizar_painel.start()
 
 # ===============================
-# TRATAMENTO GLOBAL DE ERRO
+# ERRO GLOBAL
 # ===============================
 
 @bot.event
@@ -150,7 +151,7 @@ async def on_error(event, *args, **kwargs):
     traceback.print_exc()
 
 # ===============================
-# SISTEMA DE AVISO
+# SISTEMA DE AVISO (ANTI DUPLO ENVIO)
 # ===============================
 
 @tasks.loop(seconds=30)
@@ -170,7 +171,6 @@ async def verificar_boss():
 
             hora_atual = agora.strftime("%H:%M")
             hora_menos5 = (agora + timedelta(minutes=5)).strftime("%H:%M")
-            dia_semana = agora.weekday()
 
             canal = discord.utils.get(bot.get_all_channels(), name=CANAL_NOME)
             if not canal:
@@ -180,7 +180,7 @@ async def verificar_boss():
 
                 if hora_menos5 == horario and f"5_{horario}" not in avisados:
                     embed = criar_embed(nome, local, horario, "EM 5 MINUTOS")
-                    await canal.send("**@everyone**", embed=embed)
+                    await canal.send("@everyone", embed=embed)
                     avisados.add(f"5_{horario}")
                     salvar_estado()
                     log(f"⏰ Aviso 5 min enviado para {nome}")
@@ -188,7 +188,7 @@ async def verificar_boss():
 
                 if hora_atual == horario and f"0_{horario}" not in avisados:
                     embed = criar_embed(nome, local, horario, "NASCEU")
-                    await canal.send("**@everyone**", embed=embed)
+                    await canal.send("@everyone", embed=embed)
                     avisados.add(f"0_{horario}")
                     salvar_estado()
                     log(f"🔥 Boss {nome} nasceu")
@@ -199,12 +199,12 @@ async def verificar_boss():
                 salvar_estado()
                 log("♻️ Reset diário executado")
 
-    except Exception as e:
+    except Exception:
         log("❌ Erro na task verificar_boss")
         traceback.print_exc()
 
 # ===============================
-# PAINEL
+# PAINEL FIXO
 # ===============================
 
 @tasks.loop(minutes=1)
@@ -241,19 +241,13 @@ async def atualizar_painel():
         traceback.print_exc()
 
 # ===============================
-# RECONEXÃO AUTOMÁTICA INFINITA
+# START ULTRA ESTÁVEL (RAILWAY OK)
 # ===============================
 
-async def iniciar_bot():
+if __name__ == "__main__":
     while True:
         try:
-            await bot.start(TOKEN)
-        except Exception as e:
-            log("⚠️ Conexão perdida. Tentando reconectar em 10 segundos...")
-            await asyncio.sleep(10)
-
-# ===============================
-# START
-# ===============================
-
-asyncio.run(iniciar_bot())
+            bot.run(TOKEN)
+        except Exception:
+            log("⚠️ Conexão perdida. Reconectando em 10 segundos...")
+            time.sleep(10)
