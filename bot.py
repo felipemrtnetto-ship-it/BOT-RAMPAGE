@@ -63,7 +63,7 @@ avisados = carregar_estado()
 # ===============================
 
 bosses = [
-    ("02:20", "Galia Black", "Lost Tower (165, 76)"),
+    ("02:28", "Galia Black", "Lost Tower (165, 76)"),
     ("13:10", "Kundun", "Kalima 6 - Lost Map +6"),
     ("15:10", "Kundun", "Kalima 6 - Lost Map +6"),
     ("16:45", "Galia Black", "Lost Tower (165, 76)"),
