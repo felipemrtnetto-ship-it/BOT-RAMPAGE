@@ -5,8 +5,21 @@ from datetime import datetime, timedelta
 import pytz
 import json
 import asyncio
+import sys
+import traceback
+
+# ===============================
+# TOKEN SEGURO
+# ===============================
 
 TOKEN = os.getenv("TOKEN")
+
+if not TOKEN:
+    raise ValueError("❌ TOKEN não configurado na variável de ambiente.")
+
+# ===============================
+# CONFIGURAÇÕES
+# ===============================
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -21,7 +34,15 @@ ultimo_minuto_processado = None
 mensagem_fixa = None
 
 # ===============================
-# SISTEMA DE SALVAMENTO
+# LOG PROFISSIONAL
+# ===============================
+
+def log(msg):
+    agora = datetime.now().strftime("%d/%m %H:%M:%S")
+    print(f"[{agora}] {msg}")
+
+# ===============================
+# SALVAR ESTADO
 # ===============================
 
 def carregar_estado():
@@ -37,11 +58,11 @@ def salvar_estado():
 avisados = carregar_estado()
 
 # ===============================
-# LISTA DE BOSSES
+# BOSSES
 # ===============================
 
 bosses = [
-    ("10:45", "Galia Black", "Lost Tower (165, 76)"),
+    ("02:20", "Galia Black", "Lost Tower (165, 76)"),
     ("13:10", "Kundun", "Kalima 6 - Lost Map +6"),
     ("15:10", "Kundun", "Kalima 6 - Lost Map +6"),
     ("16:45", "Galia Black", "Lost Tower (165, 76)"),
@@ -57,7 +78,7 @@ bosses = [
 ]
 
 # ===============================
-# EMBED PROFISSIONAL
+# EMBED
 # ===============================
 
 def criar_embed(nome, local, horario, status, tempo=None):
@@ -68,21 +89,21 @@ def criar_embed(nome, local, horario, status, tempo=None):
     }
 
     embed = discord.Embed(
-        title=f"🔥 **BOSS {nome} {status}!** 🔥",
+        title=f"🔥 BOSS {nome} {status}! 🔥",
         color=cores.get(status, 0xffffff)
     )
 
-    embed.add_field(name="🕒 **Horário**", value=f"**{horario}**", inline=False)
-    embed.add_field(name="📍 **Local**", value=f"**{local}**", inline=False)
+    embed.add_field(name="🕒 Horário", value=f"**{horario}**", inline=False)
+    embed.add_field(name="📍 Local", value=f"**{local}**", inline=False)
 
     if tempo:
-        embed.add_field(name="⏳ **Tempo Restante**", value=f"**{tempo}**", inline=False)
+        embed.add_field(name="⏳ Tempo Restante", value=f"**{tempo}**", inline=False)
 
-    embed.set_footer(text="Sistema Automático PRO • MU Online")
+    embed.set_footer(text="Sistema Automático ULTRA • MU Online")
     return embed
 
 # ===============================
-# CALCULAR PRÓXIMO BOSS
+# CALCULAR PRÓXIMO
 # ===============================
 
 def calcular_proximo_boss():
@@ -106,102 +127,133 @@ def calcular_proximo_boss():
     return proximos[0]
 
 # ===============================
-# EVENTO READY
+# READY
 # ===============================
 
 @bot.event
 async def on_ready():
-    print(f"Bot DEFINITIVO online como {bot.user}")
-    verificar_boss.start()
-    atualizar_painel.start()
+    log(f"🛡️ Bot ULTRA online como {bot.user}")
+
+    if not verificar_boss.is_running():
+        verificar_boss.start()
+
+    if not atualizar_painel.is_running():
+        atualizar_painel.start()
 
 # ===============================
-# VERIFICAR BOSSES (ANTI DUPLICAÇÃO)
+# TRATAMENTO GLOBAL DE ERRO
+# ===============================
+
+@bot.event
+async def on_error(event, *args, **kwargs):
+    log(f"❌ ERRO GLOBAL no evento {event}")
+    traceback.print_exc()
+
+# ===============================
+# SISTEMA DE AVISO
 # ===============================
 
 @tasks.loop(seconds=30)
 async def verificar_boss():
     global ultimo_minuto_processado
 
-    async with lock_envio:
+    try:
+        async with lock_envio:
 
-        agora = datetime.now(FUSO)
-        minuto_atual = agora.strftime("%Y-%m-%d %H:%M")
+            agora = datetime.now(FUSO)
+            minuto_atual = agora.strftime("%Y-%m-%d %H:%M")
 
-        # Impede rodar duas vezes no mesmo minuto
-        if ultimo_minuto_processado == minuto_atual:
-            return
-
-        ultimo_minuto_processado = minuto_atual
-
-        hora_atual = agora.strftime("%H:%M")
-        hora_menos5 = (agora + timedelta(minutes=5)).strftime("%H:%M")
-        dia_semana = agora.weekday()
-
-        canal = discord.utils.get(bot.get_all_channels(), name=CANAL_NOME)
-        if not canal:
-            return
-
-        for horario, nome, local in bosses:
-
-            # Aviso 5 minutos antes
-            if hora_menos5 == horario and f"5_{horario}" not in avisados:
-                embed = criar_embed(nome, local, horario, "EM 5 MINUTOS")
-                await canal.send("@everyone", embed=embed)
-                avisados.add(f"5_{horario}")
-                salvar_estado()
+            if ultimo_minuto_processado == minuto_atual:
                 return
 
-            # Aviso exato
-            if hora_atual == horario and f"0_{horario}" not in avisados:
-                embed = criar_embed(nome, local, horario, "NASCEU")
-                await canal.send("@everyone", embed=embed)
-                avisados.add(f"0_{horario}")
-                salvar_estado()
+            ultimo_minuto_processado = minuto_atual
+
+            hora_atual = agora.strftime("%H:%M")
+            hora_menos5 = (agora + timedelta(minutes=5)).strftime("%H:%M")
+            dia_semana = agora.weekday()
+
+            canal = discord.utils.get(bot.get_all_channels(), name=CANAL_NOME)
+            if not canal:
                 return
 
-        # Balgass especial
-        if hora_atual == "23:00" and dia_semana in [2, 5] and "balgass" not in avisados:
-            embed = criar_embed("Balgass", "Crywolf (112,80)", "23:00", "NASCEU")
-            await canal.send("@everyone", embed=embed)
-            avisados.add("balgass")
-            salvar_estado()
-            return
+            for horario, nome, local in bosses:
 
-        # Reset diário às 03:00
-        if hora_atual == "03:00":
-            avisados.clear()
-            salvar_estado()
+                if hora_menos5 == horario and f"5_{horario}" not in avisados:
+                    embed = criar_embed(nome, local, horario, "EM 5 MINUTOS")
+                    await canal.send("**@everyone**", embed=embed)
+                    avisados.add(f"5_{horario}")
+                    salvar_estado()
+                    log(f"⏰ Aviso 5 min enviado para {nome}")
+                    return
+
+                if hora_atual == horario and f"0_{horario}" not in avisados:
+                    embed = criar_embed(nome, local, horario, "NASCEU")
+                    await canal.send("**@everyone**", embed=embed)
+                    avisados.add(f"0_{horario}")
+                    salvar_estado()
+                    log(f"🔥 Boss {nome} nasceu")
+                    return
+
+            if hora_atual == "03:00":
+                avisados.clear()
+                salvar_estado()
+                log("♻️ Reset diário executado")
+
+    except Exception as e:
+        log("❌ Erro na task verificar_boss")
+        traceback.print_exc()
 
 # ===============================
-# PAINEL CONTAGEM REGRESSIVA
+# PAINEL
 # ===============================
 
 @tasks.loop(minutes=1)
 async def atualizar_painel():
     global mensagem_fixa
 
-    canal = discord.utils.get(bot.get_all_channels(), name=CANAL_NOME)
-    if not canal:
-        return
+    try:
+        canal = discord.utils.get(bot.get_all_channels(), name=CANAL_NOME)
+        if not canal:
+            return
 
-    diferenca, nome, local, hora_boss = calcular_proximo_boss()
+        diferenca, nome, local, hora_boss = calcular_proximo_boss()
 
-    horas, resto = divmod(int(diferenca.total_seconds()), 3600)
-    minutos, segundos = divmod(resto, 60)
-    tempo_formatado = f"{horas:02d}h {minutos:02d}m {segundos:02d}s"
+        total = int(diferenca.total_seconds())
+        horas, resto = divmod(total, 3600)
+        minutos, segundos = divmod(resto, 60)
+        tempo = f"{horas:02d}h {minutos:02d}m {segundos:02d}s"
 
-    embed = criar_embed(
-        nome,
-        local,
-        hora_boss.strftime("%H:%M"),
-        "PRÓXIMO",
-        tempo_formatado
-    )
+        embed = criar_embed(
+            nome,
+            local,
+            hora_boss.strftime("%H:%M"),
+            "PRÓXIMO",
+            tempo
+        )
 
-    if mensagem_fixa is None:
-        mensagem_fixa = await canal.send(embed=embed)
-    else:
-        await mensagem_fixa.edit(embed=embed)
+        if mensagem_fixa is None:
+            mensagem_fixa = await canal.send(embed=embed)
+        else:
+            await mensagem_fixa.edit(embed=embed)
 
-bot.run(TOKEN)
+    except Exception:
+        log("❌ Erro na task atualizar_painel")
+        traceback.print_exc()
+
+# ===============================
+# RECONEXÃO AUTOMÁTICA INFINITA
+# ===============================
+
+async def iniciar_bot():
+    while True:
+        try:
+            await bot.start(TOKEN)
+        except Exception as e:
+            log("⚠️ Conexão perdida. Tentando reconectar em 10 segundos...")
+            await asyncio.sleep(10)
+
+# ===============================
+# START
+# ===============================
+
+asyncio.run(iniciar_bot())
