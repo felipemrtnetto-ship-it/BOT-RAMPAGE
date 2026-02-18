@@ -1,30 +1,35 @@
-import discord
-from discord.ext import tasks
-import asyncio
-import pytz
-from datetime import datetime, timedelta
-import json
-import os
-import time
+const { 
+    default: makeWASocket, 
+    useMultiFileAuthState, 
+    fetchLatestBaileysVersion, 
+    DisconnectReason 
+} = require("@whiskeysockets/baileys")
 
-# ===============================
-# CONFIG
-# ===============================
+const cron = require("node-cron")
+const pino = require("pino")
+const fs = require("fs")
+const moment = require("moment-timezone")
+const qrcode = require("qrcode-terminal")
 
-TOKEN = os.getenv("TOKEN")
+// ===============================
+// CONFIGURAÇÕES
+// ===============================
 
-if not TOKEN:
-    raise ValueError("❌ TOKEN não configurado na variável de ambiente.")
+const TIMEZONE = "America/Sao_Paulo"
+const GRUPOS_FILE = "./grupos.json"
 
-CANAL_NOME = "⚠️-alerta-dos-boss"
-TIMEZONE = pytz.timezone("America/Sao_Paulo")
-ARQUIVO_ESTADO = "estado.json"
+// ✅ GRUPO RAMPAGE
+const GRUPO_PERMITIDO = "120363404442428979@g.us"
 
-intents = discord.Intents.default()
-bot = discord.Client(intents=intents)
+let grupos = {}
 
-lock = asyncio.Lock()
-ultimo_minuto_processado = None
+if (fs.existsSync(GRUPOS_FILE)) {
+    grupos = JSON.parse(fs.readFileSync(GRUPOS_FILE))
+}
+
+function salvarGrupos() {
+    fs.writeFileSync(GRUPOS_FILE, JSON.stringify(grupos, null, 2))
+}
 
 # ===============================
 # BOSSES
