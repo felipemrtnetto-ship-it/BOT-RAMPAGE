@@ -1,234 +1,154 @@
-const {
-    default: makeWASocket,
-    useMultiFileAuthState,
-    fetchLatestBaileysVersion,
-    DisconnectReason
-} = require("@whiskeysockets/baileys");
+import discord
+from discord.ext import tasks
+import asyncio
+import pytz
+from datetime import datetime, timedelta
+import json
+import os
+import time
 
-const { Boom } = require("@hapi/boom");
-const pino = require("pino");
-const fs = require("fs");
-const moment = require("moment-timezone");
-const qrcode = require("qrcode-terminal");
-const QRCode = require("qrcode");
+# ===============================
+# CONFIG
+# ===============================
 
-// ===============================
-// CONFIGURAÇÕES
-// ===============================
+TOKEN = os.getenv("TOKEN")
 
-const TIMEZONE = "America/Sao_Paulo";
-const GRUPOS_FILE = "./grupos.json";
+if not TOKEN:
+    raise ValueError("❌ TOKEN não configurado na variável de ambiente.")
 
-// ✅ GRUPO RAMPAGE
-const GRUPO_PERMITIDO = "120363404442428979@g.us";
+CANAL_NOME = "⚠️-alerta-dos-boss"
+TIMEZONE = pytz.timezone("America/Sao_Paulo")
+ARQUIVO_ESTADO = "estado.json"
 
-let grupos = {};
+intents = discord.Intents.default()
+bot = discord.Client(intents=intents)
 
-if (fs.existsSync(GRUPOS_FILE)) {
-    grupos = JSON.parse(fs.readFileSync(GRUPOS_FILE));
-}
+lock = asyncio.Lock()
+ultimo_minuto_processado = None
 
-function salvarGrupos() {
-    fs.writeFileSync(GRUPOS_FILE, JSON.stringify(grupos, null, 2));
-}
+# ===============================
+# BOSSES
+# ===============================
 
-// ===============================
-// 👑 BOSSES COM EMOJI
-// ===============================
+BOSSES = [
+    ("Galia Black", "10:45", "Lost Tower (165, 76)"),
+    ("Kundun", "13:10", "Kalima 6 - Lost Map +6"),
+    ("Kundun", "15:10", "Kalima 6 - Lost Map +6"),
+    ("Galia Black", "16:45", "Lost Tower (165, 76)"),
+    ("Blood Wizard", "18:10", "Devias ou /pvp2 (159,39)"),
+    ("Crusher Skeleton", "19:05", "Aleatório em Lorencia"),
+    ("Necromancer", "19:40", "Elbeland 2 ou /devias4 (30,39)"),
+    ("Selupan", "20:10", "Raklion ou /pvp4 (174,200)"),
+    ("Skull Reaper", "20:50", "Dungeon (91,236)"),
+    ("Gywen", "22:10", "Dungeon 3 (25,72)"),
+    ("HellMaine", "22:30", "Aida 2 (119,107)"),
+    ("Yorm", "23:40", "/lorencia1 (22,46)"),
+    ("Zorlak", "01:10", "Aleatório em Lorencia"),
+]
 
-const BOSSES = [
-  { nome: "Galia Black", emoji: "🗡️", hora: 10, minuto: 0, local: "Devias (190x30)" },
-  { nome: "Kundun", emoji: "🐲", hora: 13, minuto: 10, local: "Kalima 6 (120x88)" },
-  { nome: "Blood Wizard", emoji: "🧙‍♂️", hora: 14, minuto: 0, local: "Dungeon (45x150)" },
-  { nome: "Crusher Skeleton", emoji: "💀", hora: 14, minuto: 40, local: "Lost Tower (100x120)" },
-  { nome: "Necromancer", emoji: "☠️", hora: 15, minuto: 0, local: "Aida (85x60)" },
-  { nome: "Selupan", emoji: "🦂", hora: 15, minuto: 30, local: "Raklion (45x210)" },
-  { nome: "Skull Reaper", emoji: "👻", hora: 16, minuto: 0, local: "Tarkan (120x90)" },
-  { nome: "Gywen", emoji: "🐺", hora: 17, minuto: 0, local: "Atlans (150x50)" },
-  { nome: "HellMaine", emoji: "👿", hora: 18, minuto: 0, local: "Noria (200x120)" },
-  { nome: "Yorm", emoji: "🐗", hora: 19, minuto: 0, local: "Icarus (80x80)" },
-  { nome: "Zorlak", emoji: "🐉", hora: 19, minuto: 40, local: "Kanturu (110x90)" },
-  { nome: "Balgass", emoji: "😈", hora: 20, minuto: 0, local: "Crywolf (Boss Zone)" }
-];
+# ===============================
+# ESTADO
+# ===============================
 
-let enviadosHoje = new Set();
+def carregar_estado():
+    if not os.path.exists(ARQUIVO_ESTADO):
+        return {}
+    with open(ARQUIVO_ESTADO, "r") as f:
+        return json.load(f)
 
-function agora() {
-  return moment().tz(TIMEZONE);
-}
+def salvar_estado(estado):
+    with open(ARQUIVO_ESTADO, "w") as f:
+        json.dump(estado, f)
 
-function formatarAlerta(boss) {
-  return `${boss.emoji} HORA DO BOSS! ${boss.emoji}
+estado = carregar_estado()
 
-╔════════════════════════════╗
-║   ${boss.emoji} ${boss.nome.toUpperCase()}
-╠════════════════════════════╣
-║ ⚠️ COMEÇA EM 10 MINUTOS
-║ 🕒 ${String(boss.hora).padStart(2, "0")}:${String(boss.minuto).padStart(2, "0")}
-║ 📍 ${boss.local}
-╠════════════════════════════╣
-║ ⚔️ BUFF em /Arena6
-║ 👥 Entre na PT!
-╚════════════════════════════╝`;
-}
+# ===============================
+# EMBED
+# ===============================
 
-// ===============================
-// 🚀 INICIAR BOT
-// ===============================
+def criar_embed(nome, local, hora):
+    return discord.Embed(
+        title=f"🔥 BOSS {nome} EM 10 MINUTOS! 🔥",
+        description=f"Horário - {hora}\nLocal - {local}",
+        color=0xffa500
+    )
 
-async function startBot() {
-  try {
-    const { state, saveCreds } = await useMultiFileAuthState("auth");
-    const { version } = await fetchLatestBaileysVersion();
+# ===============================
+# LOOP PRINCIPAL
+# ===============================
 
-    const sock = makeWASocket({
-      version,
-      logger: pino({ level: "silent" }),
-      auth: state,
-      markOnlineOnConnect: true,
-      syncFullHistory: false
-    });
+@tasks.loop(seconds=30)
+async def verificar_boss():
+    global ultimo_minuto_processado
+    async with lock:
 
-    sock.ev.on("creds.update", saveCreds);
+        agora = datetime.now(TIMEZONE)
+        minuto_atual = agora.strftime("%Y-%m-%d %H:%M")
 
-    // ===============================
-    // 🔄 CONEXÃO + QR
-    // ===============================
+        if minuto_atual == ultimo_minuto_processado:
+            return
 
-    sock.ev.on("connection.update", async (update) => {
-      const { connection, lastDisconnect, qr } = update;
+        ultimo_minuto_processado = minuto_atual
 
-      if (qr) {
-        console.log("📱 Escaneie o QR abaixo:");
-        qrcode.generate(qr, { small: true });
+        # Reset diário às 03:00
+        if agora.strftime("%H:%M") == "03:00":
+            estado.clear()
+            salvar_estado(estado)
 
-        try {
-          const qrBase64 = await QRCode.toDataURL(qr);
-          console.log("\n==============================");
-          console.log("🔗 LINK DO QR CODE:");
-          console.log(qrBase64);
-          console.log("==============================\n");
-        } catch (err) {
-          console.log("Erro ao gerar QR em link:", err.message);
-        }
-      }
+        canal = discord.utils.get(bot.get_all_channels(), name=CANAL_NOME)
+        if not canal:
+            return
 
-      if (connection === "open") {
-        console.log("✅ Bot conectado com sucesso!");
-      }
+        for nome, horario, local in BOSSES:
+            hora_boss = datetime.strptime(horario, "%H:%M")
+            hora_boss = TIMEZONE.localize(
+                datetime(
+                    agora.year,
+                    agora.month,
+                    agora.day,
+                    hora_boss.hour,
+                    hora_boss.minute
+                )
+            )
 
-      if (connection === "close") {
-        const shouldReconnect =
-          new Boom(lastDisconnect?.error)?.output?.statusCode !== DisconnectReason.loggedOut;
+            if hora_boss < agora:
+                hora_boss += timedelta(days=1)
 
-        if (shouldReconnect) {
-          console.log("🔄 Reconectando em 5 segundos...");
-          setTimeout(startBot, 5000);
-        } else {
-          console.log("❌ Sessão encerrada. Apague a pasta 'auth' e gere novo QR.");
-        }
-      }
-    });
+            diferenca = (hora_boss - agora).total_seconds()
+            chave = f"{nome}_{horario}_10"
 
-    // ===============================
-    // 📩 MENSAGENS
-    // ===============================
+            if 0 < diferenca <= 600:
+                if not estado.get(chave):
 
-    sock.ev.on("messages.upsert", async ({ messages }) => {
-      try {
-        const msg = messages[0];
-        if (!msg.message || msg.key.fromMe) return;
+                    embed = criar_embed(nome, local, horario)
 
-        const chatId = msg.key.remoteJid;
-        if (chatId !== GRUPO_PERMITIDO) return;
+                    await canal.send(
+                        content="@everyone",
+                        embed=embed,
+                        allowed_mentions=discord.AllowedMentions(everyone=True)
+                    )
 
-        const texto =
-          msg.message.conversation ||
-          msg.message.extendedTextMessage?.text ||
-          "";
+                    estado[chave] = True
+                    salvar_estado(estado)
 
-        if (texto.toLowerCase() === "/status") {
-          await sock.sendMessage(chatId, {
-            text: `🤖 BOT ONLINE
+# ===============================
+# READY
+# ===============================
 
-🕒 ${agora().format("DD/MM/YYYY HH:mm:ss")}
-🔥 Sistema ativo`
-          });
-        }
+@bot.event
+async def on_ready():
+    print(f"🛡️ Bot online como {bot.user}")
+    if not verificar_boss.is_running():
+        verificar_boss.start()
 
-        if (texto.toLowerCase().startsWith("/boss")) {
-          const nome = texto.replace("/boss", "").trim().toLowerCase();
+# ===============================
+# RECONEXÃO AUTOMÁTICA
+# ===============================
 
-          const boss = BOSSES.find(
-            b => b.nome.toLowerCase() === nome
-          );
-
-          if (!boss) {
-            return sock.sendMessage(chatId, { text: "❌ Boss não encontrado." });
-          }
-
-          await sock.sendMessage(chatId, {
-            text: formatarAlerta(boss)
-          });
-        }
-
-      } catch (err) {
-        console.log("Erro ao processar mensagem:", err.message);
-      }
-    });
-
-    // ===============================
-    // 🔔 ALERTA AUTOMÁTICO (CORRIGIDO)
-    // ===============================
-
-    setInterval(async () => {
-      try {
-        const agoraAtual = agora();
-
-        for (const boss of BOSSES) {
-
-          let horarioBoss = moment.tz(TIMEZONE)
-            .set({
-              hour: boss.hora,
-              minute: boss.minuto,
-              second: 0,
-              millisecond: 0
-            });
-
-          if (horarioBoss.isBefore(agoraAtual)) {
-            horarioBoss.add(1, "day");
-          }
-
-          const diferencaMin = horarioBoss.diff(agoraAtual, "minutes");
-
-          const chave = `${boss.nome}-${horarioBoss.format("YYYY-MM-DD")}`;
-
-          if (diferencaMin === 10 && !enviadosHoje.has(chave)) {
-
-            enviadosHoje.add(chave);
-
-            await sock.sendMessage(GRUPO_PERMITIDO, {
-              text: formatarAlerta(boss)
-            });
-
-            console.log("🔔 Alerta enviado:", boss.nome);
-          }
-        }
-
-        if (agoraAtual.format("HH:mm:ss") === "00:00:00") {
-          enviadosHoje.clear();
-          console.log("🔄 Reset diário executado");
-        }
-
-      } catch (err) {
-        console.log("Erro no sistema automático:", err.message);
-      }
-    }, 30000);
-
-  } catch (err) {
-    console.log("Erro crítico:", err.message);
-    setTimeout(startBot, 5000);
-  }
-}
-
-startBot();
+if __name__ == "__main__":
+    while True:
+        try:
+            bot.run(TOKEN)
+        except Exception:
+            print("⚠️ Reconectando em 10 segundos...")
+            time.sleep(10)
