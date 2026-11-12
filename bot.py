@@ -18,7 +18,10 @@ TOKEN = os.getenv("TOKEN") or os.getenv("DISCORD_TOKEN")
 if not TOKEN:
     raise ValueError("❌ TOKEN ou DISCORD_TOKEN não configurado na variável de ambiente.")
 
-CANAL_ID = 1570446068490043442  # ID oficial do canal
+# Canais do Discord separados
+CANAL_PAINEL_ID = 1570446068490043442   # Canal onde fica rodando o painel de horários fixo
+CANAL_ALERTAS_ID = 1570454121922822265  # Canal onde vão cair os avisos de 30 e 10 min com @everyone
+
 TIMEZONE = pytz.timezone("America/Sao_Paulo")
 ARQUIVO_ESTADO = "estado.json"
 
@@ -154,74 +157,97 @@ async def verificar_boss():
     async with lock:
         agora = datetime.now(TIMEZONE)
 
-        canal = bot.get_channel(CANAL_ID)
-        if not canal:
+        # 1. ATUALIZAÇÃO DO PAINEL DE HORÁRIOS (Canal 1570446068490043442)
+        canal_painel = bot.get_channel(CANAL_PAINEL_ID)
+        if not canal_painel:
             try:
-                canal = await bot.fetch_channel(CANAL_ID)
+                canal_painel = await bot.fetch_channel(CANAL_PAINEL_ID)
             except discord.DiscordException:
-                return
+                canal_painel = None
 
-        embed_painel = criar_embed_agenda_detalhada(agora)
+        if canal_painel:
+            embed_painel = criar_embed_agenda_detalhada(agora)
 
-        msg_id = estado.get("id_mensagem_painel")
-        if msg_id:
+            msg_id = estado.get("id_mensagem_painel")
+            if msg_id:
+                try:
+                    msg_antiga = await canal_painel.fetch_message(msg_id)
+                    await msg_antiga.delete()
+                except discord.NotFound:
+                    pass
+                except discord.DiscordException:
+                    pass
+
+            nova_msg = await canal_painel.send(embed=embed_painel)
+            estado["id_mensagem_painel"] = nova_msg.id
+            salvar_estado(estado)
+
+        # 2. CANAL DE ALERTAS (Canal 1570454121922822265)
+        canal_alertas = bot.get_channel(CANAL_ALERTAS_ID)
+        if not canal_alertas:
             try:
-                msg_antiga = await canal.fetch_message(msg_id)
-                await msg_antiga.delete()
-            except discord.NotFound:
-                pass
+                canal_alertas = await bot.fetch_channel(CANAL_ALERTAS_ID)
             except discord.DiscordException:
-                pass
+                canal_alertas = None
 
-        nova_msg = await canal.send(embed=embed_painel)
-        estado["id_mensagem_painel"] = nova_msg.id
-        salvar_estado(estado)
+        if canal_alertas:
+            for evento in BOSSES:
+                nome, horario, dias, mapa, coords = evento
 
-        # Alertas de 30 e 10 minutos
-        for evento in BOSSES:
-            nome, horario, dias, mapa, coords = evento
+                if dias is not None and agora.weekday() not in dias:
+                    continue
 
-            if dias is not None and agora.weekday() not in dias:
-                continue
+                hora_boss = datetime.strptime(horario, "%H:%M")
+                hora_boss = TIMEZONE.localize(
+                    datetime(agora.year, agora.month, agora.day, hora_boss.hour, hora_boss.minute)
+                )
 
-            hora_boss = datetime.strptime(horario, "%H:%M")
-            hora_boss = TIMEZONE.localize(
-                datetime(agora.year, agora.month, agora.day, hora_boss.hour, hora_boss.minute)
-            )
+                if hora_boss < agora:
+                    hora_boss += timedelta(days=1)
 
-            if hora_boss < agora:
-                hora_boss += timedelta(days=1)
+                diferenca = (hora_boss - agora).total_seconds()
+                agorastr = agora.strftime('%Y-%m-%d')
 
-            diferenca = (hora_boss - agora).total_seconds()
-            agorastr = agora.strftime('%Y-%m-%d')
+                # Pré-alerta de 30 minutos
+                chave_30 = f"{nome}_{horario}_{agorastr}_30"
+                if 1795 <= diferenca <= 1800:
+                    if not estado.get(chave_30):
+                        embed_30 = discord.Embed(
+                            title=f"⚠️ PRÉ-ALERTA: {nome} em 30 minutos!",
+                            description=f"⏰ **Horário:** {horario}\n📍 **Mapa:** {mapa} ({coords})",
+                            color=0x3498db
+                        )
+                        msg_alerta = await canal_alertas.send(embed=embed_30)
+                        estado[chave_30] = True
+                        salvar_estado(estado)
+                        asyncio.create_task(apagar_mensagem_depois(msg_alerta, 900))
 
-            chave_30 = f"{nome}_{horario}_{agorastr}_30"
-            if 1795 <= diferenca <= 1800:
-                if not estado.get(chave_30):
-                    embed_30 = discord.Embed(
-                        title=f"⚠️ PRÉ-ALERTA: {nome} em 30 minutos!",
-                        description=f"⏰ **Horário:** {horario}\n📍 **Mapa:** {mapa} ({coords})",
-                        color=0x3498db
-                    )
-                    await canal.send(embed=embed_30)
-                    estado[chave_30] = True
-                    salvar_estado(estado)
+                # Alerta principal de 10 minutos
+                chave_10 = f"{nome}_{horario}_{agorastr}_10"
+                if 595 <= diferenca <= 600:
+                    if not estado.get(chave_10):
+                        embed_10 = discord.Embed(
+                            title=f"🔥 BOSS {nome} NASCENDO EM BREVE! 🔥",
+                            description=f"⏰ **Horário:** {horario}\n📍 **Mapa:** {mapa} ({coords})\n\n*Corram para o local!*",
+                            color=0xffa500
+                        )
+                        msg_alerta = await canal_alertas.send(
+                            content="@everyone",
+                            embed=embed_10,
+                            allowed_mentions=discord.AllowedMentions(everyone=True)
+                        )
+                        estado[chave_10] = True
+                        salvar_estado(estado)
+                        asyncio.create_task(apagar_mensagem_depois(msg_alerta, 900))
 
-            chave_10 = f"{nome}_{horario}_{agorastr}_10"
-            if 595 <= diferenca <= 600:
-                if not estado.get(chave_10):
-                    embed_10 = discord.Embed(
-                        title=f"🔥 BOSS {nome} NASCENDO EM BREVE! 🔥",
-                        description=f"⏰ **Horário:** {horario}\n📍 **Mapa:** {mapa} ({coords})\n\n*Corram para o local!*",
-                        color=0xffa500
-                    )
-                    await canal.send(
-                        content="@everyone",
-                        embed=embed_10,
-                        allowed_mentions=discord.AllowedMentions(everyone=True)
-                    )
-                    estado[chave_10] = True
-                    salvar_estado(estado)
+async def apagar_mensagem_depois(mensagem, segundos):
+    await asyncio.sleep(segundos)
+    try:
+        await mensagem.delete()
+    except discord.NotFound:
+        pass
+    except discord.DiscordException:
+        pass
 
 # ===============================
 # READY
