@@ -194,27 +194,4 @@ async def verificar_boss():
             diferenca = (hora_boss - agora).total_seconds()
             agorastr = agora.strftime('%Y-%m-%d')
 
-            # Pré-alerta de 30 minutos (janela de 5 segundos)
-            chave_30 = f"{nome}_{horario}_{agorastr}_30"
-            if 1795 <= diferenca <= 1800:
-                if not estado.get(chave_30):
-                    embed_30 = discord.Embed(
-                        title=f"⚠️ PRÉ-ALERTA: {nome} em 30 minutos!",
-                        description=f"⏰ **Horário:** {horario}\n📍 **Mapa:** {mapa} ({coords})",
-                        color=0x3498db
-                    )
-                    await canal.send(embed=embed_30)
-                    estado[chave_30] = True
-                    salvar_estado(estado)
-
-            # Alerta principal de 10 minutos
-            chave_10 = f"{nome}_{horario}_{agorastr}_10"
-            if 595 <= diferenca <= 600:
-                if not estado.get(chave_10):
-                    embed_10 = discord.Embed(
-                        title=f"🔥 BOSS {nome} NASCENDO EM BREVE! 🔥",
-                        description=f"⏰ **Horário:** {horario}\n📍 **Mapa:** {mapa} ({coords})\n\n*Corram para o local!*",
-                        color=0xffa500
-                    )
-                    await canal.send(
-                        content="@everyone",
+            # Pré-alerta de 30 minutos (janela
