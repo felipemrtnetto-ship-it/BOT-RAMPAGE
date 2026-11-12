@@ -21,6 +21,7 @@ TIMEZONE = pytz.timezone("America/Sao_Paulo")
 ARQUIVO_ESTADO = "estado.json"
 
 intents = discord.Intents.default()
+intents.message_content = True
 bot = discord.Client(intents=intents)
 
 lock = asyncio.Lock()
@@ -60,7 +61,7 @@ def carregar_estado():
 
 def salvar_estado(estado):
     try:
-        with open(ARQUIVO_ESTADO, "w") as f:
+        with open(ARQUIVO_ESTADO, "w", encoding="utf-8") as f:
             json.dump(estado, f)
     except Exception:
         pass
@@ -68,14 +69,13 @@ def salvar_estado(estado):
 estado = carregar_estado()
 
 # ===============================
-# FUNÇÃO AUXILIAR: ENCONTRAR O PRÓXIMO BOSS
+# FUNÇÕES AUXILIARES
 # ===============================
 
 def obter_proximo_boss(agora):
-    hoje_weekday = agora.weekday()
+    weekday_atual = agora.weekday()
     candidatos = []
 
-    # Olha os bosses de hoje e de amanhã para garantir que sempre ache o próximo
     for dia_offset in [0, 1]:
         dia_alvo = agora.date() + timedelta(days=dia_offset)
         weekday_alvo = dia_alvo.weekday()
@@ -89,19 +89,55 @@ def obter_proximo_boss(agora):
                 datetime(dia_alvo.year, dia_alvo.month, dia_alvo.day, hora, minuto)
             )
 
-            # Se for do dia seguinte ou do dia de hoje que ainda vai acontecer
             if dt_boss > agora:
                 candidatos.append((dt_boss, nome, horario, local))
 
     if not candidatos:
         return None
 
-    # Ordena pelo mais próximo do momento atual
     candidatos.sort(key=lambda x: x[0])
-    return candidatos[0] # Retorna (dt_boss, nome, horario, local)
+    return candidatos[0]
+
+def gerar_embed_agenda_diaria(agora):
+    weekday_atual = agora.weekday()
+    embed = discord.Embed(
+        title="📅 AGENDA DIÁRIA DE BOSSES",
+        description="Lista completa dos bosses de hoje com contagem regressiva em tempo real:",
+        color=0x2ecc71
+    )
+
+    encontrou = False
+    for nome, horario, dias, local in BOSSES:
+        if dias is not None and weekday_atual not in dias:
+            continue
+
+        hora, minuto = map(int, horario.split(":"))
+        dt_boss = TIMEZONE.localize(
+            datetime(agora.year, agora.month, agora.day, hora, minuto)
+        )
+
+        if dt_boss < agora:
+            # Se já passou hoje, mostra como encerrado ou calcula para amanhã
+            status = "✅ *Encerrado*"
+        else:
+            timestamp = int(dt_boss.timestamp())
+            status = f"⏳ <t:{timestamp}:R> ({horario})"
+
+        embed.add_field(
+            name=f"🛡️ {nome}",
+            value=f"Local: `{local}`\nStatus: {status}",
+            inline=False
+        )
+        encontrou = True
+
+    if not encontrou:
+        embed.description = "Nenhum boss programado para hoje."
+
+    embed.set_footer(text="Digite !bosses para atualizar a lista a qualquer momento.")
+    return embed
 
 # ===============================
-# LOOP PRINCIPAL (ALERTAS + PAINEL DO PRÓXIMO BOSS)
+# LOOP PRINCIPAL (PAINEL DO PRÓXIMO + ALERTAS)
 # ===============================
 
 @tasks.loop(seconds=30)
@@ -119,11 +155,10 @@ async def verificar_boss():
             except discord.DiscordException:
                 return
 
-        # --- 1. ATUALIZAÇÃO CONTÍNUA DO PRÓXIMO BOSS (A cada minuto) ---
+        # 1. ATUALIZAÇÃO DO PAINEL DO PRÓXIMO BOSS (A cada minuto)
         if minuto_atual != ultimo_minuto_processado:
             ultimo_minuto_processado = minuto_atual
 
-            # Busca o próximo boss na fila
             proximo = obter_proximo_boss(agora)
             if proximo:
                 dt_proximo, nome_prox, hora_prox, local_prox = proximo
@@ -134,14 +169,13 @@ async def verificar_boss():
                     description=(
                         f"🎯 **Boss:** `{nome_prox}`\n"
                         f"⏰ **Horário:** `{hora_prox}`\n"
-                        f"⏳ **Começa:** <t:{timestamp_prox}:R>\n"
+                        f"⏳ **Inicia:** <t:{timestamp_prox}:R>\n"
                         f"📍 **Local:** `{local_prox}`"
                     ),
-                    color=0x9b59b6 # Cor roxa/azulada para o painel contínuo
+                    color=0x9b59b6
                 )
-                embed_painel.set_footer(text="Atualizado automaticamente em tempo real")
+                embed_painel.set_footer(text="Painel atualizado automaticamente")
 
-                # ID da mensagem fixa do painel salva no estado (para o bot editar sempre a mesma mensagem e não poluir o chat)
                 msg_id = estado.get("id_mensagem_painel")
                 mensagem_painel = None
 
@@ -157,21 +191,19 @@ async def verificar_boss():
                     except discord.DiscordException:
                         pass
                 else:
-                    # Se não existir mensagem salva, envia uma nova e salva o ID
                     nova_msg = await canal.send(embed=embed_painel)
                     estado["id_mensagem_painel"] = nova_msg.id
                     salvar_estado(estado)
 
-        # Reset diário das travas de alerta às 03:00
+        # Reset diário às 03:00
         if agora.strftime("%H:%M") == "03:00":
-            # Mantém apenas o ID da mensagem do painel para não perder a referência
             painel_id = estado.get("id_mensagem_painel")
             estado.clear()
             if painel_id:
                 estado["id_mensagem_painel"] = painel_id
             salvar_estado(estado)
 
-        # --- 2. DISPARO DOS ALERTAS DE 30 E 10 MINUTOS ---
+        # 2. DISPARO DOS ALERTAS DE 30 E 10 MINUTOS
         for evento in BOSSES:
             nome, horario, dias, local = evento
 
@@ -221,14 +253,31 @@ async def verificar_boss():
                     salvar_estado(estado)
 
 # ===============================
-# READY
+# COMANDOS DE CHAT
 # ===============================
 
 @bot.event
 async def on_ready():
-    print(f"🛡️ Bot de Alertas com Painel Contínuo online como {bot.user}")
+    print(f"🛡️ Bot de Alertas e Agenda online como {bot.user}")
     if not verificar_boss.is_running():
         verificar_boss.start()
+
+@bot.event
+async def on_message(message):
+    if message.author.bot or message.guild is None:
+        return
+
+    conteudo = message.content.strip().lower()
+
+    # Comando para exibir a lista completa de todos os bosses com contagem regressiva
+    if conteudo == "!bosses" or conteudo == "!agenda":
+        agora = datetime.now(TIMEZONE)
+        embed_agenda = gerar_embed_agenda_diaria(agora)
+        await message.channel.send(embed=embed_agenda)
+        try:
+            await message.delete()
+        except discord.DiscordException:
+            pass
 
 # ===============================
 # RECONEXÃO AUTOMÁTICA
