@@ -7,6 +7,8 @@ import json
 import os
 import time
 
+print("🔄 A iniciar o script do bot...")
+
 # ===============================
 # CONFIG
 # ===============================
@@ -16,12 +18,13 @@ TOKEN = os.getenv("TOKEN") or os.getenv("DISCORD_TOKEN")
 if not TOKEN:
     raise ValueError("❌ TOKEN ou DISCORD_TOKEN não configurado na variável de ambiente.")
 
-CANAL_ID = 1570446068490043442  # ID oficial do canal de alerta
+CANAL_ID = 1570446068490043442  # ID oficial do canal
 TIMEZONE = pytz.timezone("America/Sao_Paulo")
 ARQUIVO_ESTADO = "estado.json"
 
 intents = discord.Intents.default()
 intents.message_content = True
+intents.guilds = True
 bot = discord.Client(intents=intents)
 
 lock = asyncio.Lock()
@@ -105,12 +108,11 @@ def criar_embed_agenda_detalhada(agora):
         )
 
         if dt_boss < agora:
-            dt_boss += timedelta(days=1)  # Se já passou hoje, calcula para amanhã
+            dt_boss += timedelta(days=1)
 
         diferenca = (dt_boss - agora).total_seconds()
         tempo_formatado = formatar_tempo(diferenca)
 
-        # Status visual
         if diferenca <= 600:
             icone = "🔥"
         elif diferenca <= 1800:
@@ -147,7 +149,7 @@ def criar_embed_agenda_detalhada(agora):
 # LOOP PRINCIPAL (PAINEL + ALERTAS)
 # ===============================
 
-@tasks.loop(seconds=5)  # Atualiza a cada 5 segundos para o relógio rodar fluido
+@tasks.loop(seconds=5)
 async def verificar_boss():
     async with lock:
         agora = datetime.now(TIMEZONE)
@@ -159,7 +161,6 @@ async def verificar_boss():
             except discord.DiscordException:
                 return
 
-        # 1. ATUALIZAÇÃO DO PAINEL ÚNICO (Deleta o anterior e envia o novo atualizado)
         embed_painel = criar_embed_agenda_detalhada(agora)
 
         msg_id = estado.get("id_mensagem_painel")
@@ -176,7 +177,7 @@ async def verificar_boss():
         estado["id_mensagem_painel"] = nova_msg.id
         salvar_estado(estado)
 
-        # 2. DISPARO DOS ALERTAS DE 30 E 10 MINUTOS
+        # Alertas de 30 e 10 minutos
         for evento in BOSSES:
             nome, horario, dias, mapa, coords = evento
 
@@ -194,4 +195,48 @@ async def verificar_boss():
             diferenca = (hora_boss - agora).total_seconds()
             agorastr = agora.strftime('%Y-%m-%d')
 
-            # Pré-alerta de 30 minutos (janela
+            chave_30 = f"{nome}_{horario}_{agorastr}_30"
+            if 1795 <= diferenca <= 1800:
+                if not estado.get(chave_30):
+                    embed_30 = discord.Embed(
+                        title=f"⚠️ PRÉ-ALERTA: {nome} em 30 minutos!",
+                        description=f"⏰ **Horário:** {horario}\n📍 **Mapa:** {mapa} ({coords})",
+                        color=0x3498db
+                    )
+                    await canal.send(embed=embed_30)
+                    estado[chave_30] = True
+                    salvar_estado(estado)
+
+            chave_10 = f"{nome}_{horario}_{agorastr}_10"
+            if 595 <= diferenca <= 600:
+                if not estado.get(chave_10):
+                    embed_10 = discord.Embed(
+                        title=f"🔥 BOSS {nome} NASCENDO EM BREVE! 🔥",
+                        description=f"⏰ **Horário:** {horario}\n📍 **Mapa:** {mapa} ({coords})\n\n*Corram para o local!*",
+                        color=0xffa500
+                    )
+                    await canal.send(
+                        content="@everyone",
+                        embed=embed_10,
+                        allowed_mentions=discord.AllowedMentions(everyone=True)
+                    )
+                    estado[chave_10] = True
+                    salvar_estado(estado)
+
+# ===============================
+# READY
+# ===============================
+
+@bot.event
+async def on_ready():
+    print(f"🛡️ Bot conectado com sucesso como {bot.user}")
+    if not verificar_boss.is_running():
+        verificar_boss.start()
+        print("🚀 Loop de verificação iniciado com sucesso!")
+
+# ===============================
+# EXECUÇÃO
+# ===============================
+
+if __name__ == "__main__":
+    bot.run(TOKEN)
