@@ -61,21 +61,31 @@ def salvar_estado(estado):
 estado = carregar_estado()
 
 # ===============================
-# EMBEDS
+# EMBEDS COM CONTAGEM REGRESSIVA DINÂMICA
 # ===============================
 
-def criar_embed_pre_alerta(nome, local, hora):
+def criar_embed_pre_alerta(nome, local, hora, timestamp_unix):
     return discord.Embed(
-        title=f"⚠️ PRÉ-ALERTA: {nome} em 30 minutos!",
-        description=f"⏰ **Horário:** {hora}\n📍 **Local:** {local}\n\n*Preparem-se, o boss vai nascer em breve!*",
-        color=0x3498db  # Azul informativo
+        title=f"⚠️ PRÉ-ALERTA: {nome}",
+        description=(
+            f"⏰ **Horário:** {hora}\n"
+            f"⏳ **Inicia:** <t:{timestamp_unix}:R>\n"
+            f"📍 **Local:** {local}\n\n"
+            "*Preparem-se, o boss vai nascer em breve!*"
+        ),
+        color=0x3498db
     )
 
-def criar_embed_alerta(nome, local, hora):
+def criar_embed_alerta(nome, local, hora, timestamp_unix):
     return discord.Embed(
-        title=f"🔥 BOSS {nome} EM 10 MINUTOS! 🔥",
-        description=f"⏰ **Horário:** {hora}\n📍 **Local:** {local}\n\n*Corram para o local!*",
-        color=0xffa500  # Laranja de urgência
+        title=f"🔥 BOSS {nome} NASCENDO! 🔥",
+        description=(
+            f"⏰ **Horário:** {hora}\n"
+            f"⏳ **Tempo Restante:** <t:{timestamp_unix}:R>\n"
+            f"📍 **Local:** {local}\n\n"
+            "*Corram para o local!*"
+        ),
+        color=0xffa500
     )
 
 # ===============================
@@ -130,13 +140,14 @@ async def verificar_boss():
 
             diferenca = (hora_boss - agora).total_seconds()
             data_str = agora.strftime('%Y-%m-%d')
+            timestamp_unix = int(hora_boss.timestamp())
 
             # 1. PRÉ-ALERTA DE 30 MINUTOS (entre 1740 e 1800 segundos)
             chave_30 = f"{nome}_{horario}_{data_str}_30"
             if 1740 <= diferenca <= 1800:
                 if not estado.get(chave_30):
-                    embed = criar_embed_pre_alerta(nome, local, horario)
-                    await canal.send(embed=embed)  # Sem @everyone no pré-alerta para não spammar tanto
+                    embed = criar_embed_pre_alerta(nome, local, horario, timestamp_unix)
+                    await canal.send(embed=embed)
                     estado[chave_30] = True
                     salvar_estado(estado)
 
@@ -144,7 +155,7 @@ async def verificar_boss():
             chave_10 = f"{nome}_{horario}_{data_str}_10"
             if 0 < diferenca <= 600:
                 if not estado.get(chave_10):
-                    embed = criar_embed_alerta(nome, local, horario)
+                    embed = criar_embed_alerta(nome, local, horario, timestamp_unix)
                     await canal.send(
                         content="@everyone",
                         embed=embed,
