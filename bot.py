@@ -11,10 +11,10 @@ import time
 # CONFIG
 # ===============================
 
-TOKEN = os.getenv("TOKEN")
+TOKEN = os.getenv("TOKEN") or os.getenv("DISCORD_TOKEN")
 
 if not TOKEN:
-    raise ValueError("❌ TOKEN não configurado na variável de ambiente.")
+    raise ValueError("❌ TOKEN ou DISCORD_TOKEN não configurado na variável de ambiente.")
 
 CANAL_ID = 1570446068490043442  # ID oficial do canal de alerta
 TIMEZONE = pytz.timezone("America/Sao_Paulo")
@@ -28,6 +28,7 @@ ultimo_minuto_processado = None
 
 # ===============================
 # BOSSES (TABELA OFICIAL)
+# Formato: (Nome, Horário, Dias [None = todos], Local)
 # ===============================
 
 BOSSES = [
@@ -51,45 +52,56 @@ BOSSES = [
 def carregar_estado():
     if not os.path.exists(ARQUIVO_ESTADO):
         return {}
-    with open(ARQUIVO_ESTADO, "r") as f:
-        return json.load(f)
+    try:
+        with open(ARQUIVO_ESTADO, "r") as f:
+            return json.load(f)
+    except Exception:
+        return {}
 
 def salvar_estado(estado):
-    with open(ARQUIVO_ESTADO, "w") as f:
-        json.dump(estado, f)
+    try:
+        with open(ARQUIVO_ESTADO, "w") as f:
+            json.dump(estado, f)
+    except Exception:
+        pass
 
 estado = carregar_estado()
 
 # ===============================
-# EMBEDS COM CONTAGEM REGRESSIVA DINÂMICA
+# FUNÇÃO AUXILIAR: ENCONTRAR O PRÓXIMO BOSS
 # ===============================
 
-def criar_embed_pre_alerta(nome, local, hora, timestamp_unix):
-    return discord.Embed(
-        title=f"⚠️ PRÉ-ALERTA: {nome}",
-        description=(
-            f"⏰ **Horário:** {hora}\n"
-            f"⏳ **Inicia:** <t:{timestamp_unix}:R>\n"
-            f"📍 **Local:** {local}\n\n"
-            "*Preparem-se, o boss vai nascer em breve!*"
-        ),
-        color=0x3498db
-    )
+def obter_proximo_boss(agora):
+    hoje_weekday = agora.weekday()
+    candidatos = []
 
-def criar_embed_alerta(nome, local, hora, timestamp_unix):
-    return discord.Embed(
-        title=f"🔥 BOSS {nome} NASCENDO! 🔥",
-        description=(
-            f"⏰ **Horário:** {hora}\n"
-            f"⏳ **Tempo Restante:** <t:{timestamp_unix}:R>\n"
-            f"📍 **Local:** {local}\n\n"
-            "*Corram para o local!*"
-        ),
-        color=0xffa500
-    )
+    # Olha os bosses de hoje e de amanhã para garantir que sempre ache o próximo
+    for dia_offset in [0, 1]:
+        dia_alvo = agora.date() + timedelta(days=dia_offset)
+        weekday_alvo = dia_alvo.weekday()
+
+        for nome, horario, dias, local in BOSSES:
+            if dias is not None and weekday_alvo not in dias:
+                continue
+
+            hora, minuto = map(int, horario.split(":"))
+            dt_boss = TIMEZONE.localize(
+                datetime(dia_alvo.year, dia_alvo.month, dia_alvo.day, hora, minuto)
+            )
+
+            # Se for do dia seguinte ou do dia de hoje que ainda vai acontecer
+            if dt_boss > agora:
+                candidatos.append((dt_boss, nome, horario, local))
+
+    if not candidatos:
+        return None
+
+    # Ordena pelo mais próximo do momento atual
+    candidatos.sort(key=lambda x: x[0])
+    return candidatos[0] # Retorna (dt_boss, nome, horario, local)
 
 # ===============================
-# LOOP PRINCIPAL
+# LOOP PRINCIPAL (ALERTAS + PAINEL DO PRÓXIMO BOSS)
 # ===============================
 
 @tasks.loop(seconds=30)
@@ -100,16 +112,6 @@ async def verificar_boss():
         agora = datetime.now(TIMEZONE)
         minuto_atual = agora.strftime("%Y-%m-%d %H:%M")
 
-        if minuto_atual == ultimo_minuto_processado:
-            return
-
-        ultimo_minuto_processado = minuto_atual
-
-        # Reset diário às 03:00
-        if agora.strftime("%H:%M") == "03:00":
-            estado.clear()
-            salvar_estado(estado)
-
         canal = bot.get_channel(CANAL_ID)
         if not canal:
             try:
@@ -117,22 +119,68 @@ async def verificar_boss():
             except discord.DiscordException:
                 return
 
+        # --- 1. ATUALIZAÇÃO CONTÍNUA DO PRÓXIMO BOSS (A cada minuto) ---
+        if minuto_atual != ultimo_minuto_processado:
+            ultimo_minuto_processado = minuto_atual
+
+            # Busca o próximo boss na fila
+            proximo = obter_proximo_boss(agora)
+            if proximo:
+                dt_proximo, nome_prox, hora_prox, local_prox = proximo
+                timestamp_prox = int(dt_proximo.timestamp())
+
+                embed_painel = discord.Embed(
+                    title="⏳ PRÓXIMO BOSS NA FILA",
+                    description=(
+                        f"🎯 **Boss:** `{nome_prox}`\n"
+                        f"⏰ **Horário:** `{hora_prox}`\n"
+                        f"⏳ **Começa:** <t:{timestamp_prox}:R>\n"
+                        f"📍 **Local:** `{local_prox}`"
+                    ),
+                    color=0x9b59b6 # Cor roxa/azulada para o painel contínuo
+                )
+                embed_painel.set_footer(text="Atualizado automaticamente em tempo real")
+
+                # ID da mensagem fixa do painel salva no estado (para o bot editar sempre a mesma mensagem e não poluir o chat)
+                msg_id = estado.get("id_mensagem_painel")
+                mensagem_painel = None
+
+                if msg_id:
+                    try:
+                        mensagem_painel = await canal.fetch_message(msg_id)
+                    except discord.NotFound:
+                        mensagem_painel = None
+
+                if mensagem_painel:
+                    try:
+                        await mensagem_painel.edit(embed=embed_painel)
+                    except discord.DiscordException:
+                        pass
+                else:
+                    # Se não existir mensagem salva, envia uma nova e salva o ID
+                    nova_msg = await canal.send(embed=embed_painel)
+                    estado["id_mensagem_painel"] = nova_msg.id
+                    salvar_estado(estado)
+
+        # Reset diário das travas de alerta às 03:00
+        if agora.strftime("%H:%M") == "03:00":
+            # Mantém apenas o ID da mensagem do painel para não perder a referência
+            painel_id = estado.get("id_mensagem_painel")
+            estado.clear()
+            if painel_id:
+                estado["id_mensagem_painel"] = painel_id
+            salvar_estado(estado)
+
+        # --- 2. DISPARO DOS ALERTAS DE 30 E 10 MINUTOS ---
         for evento in BOSSES:
             nome, horario, dias, local = evento
 
-            # Valida se o boss acontece no dia da semana atual
             if dias is not None and agora.weekday() not in dias:
                 continue
 
             hora_boss = datetime.strptime(horario, "%H:%M")
             hora_boss = TIMEZONE.localize(
-                datetime(
-                    agora.year,
-                    agora.month,
-                    agora.day,
-                    hora_boss.hour,
-                    hora_boss.minute
-                )
+                datetime(agora.year, agora.month, agora.day, hora_boss.hour, hora_boss.minute)
             )
 
             if hora_boss < agora:
@@ -142,23 +190,31 @@ async def verificar_boss():
             data_str = agora.strftime('%Y-%m-%d')
             timestamp_unix = int(hora_boss.timestamp())
 
-            # 1. PRÉ-ALERTA DE 30 MINUTOS (entre 1740 e 1800 segundos)
+            # Pré-alerta de 30 minutos
             chave_30 = f"{nome}_{horario}_{data_str}_30"
             if 1740 <= diferenca <= 1800:
                 if not estado.get(chave_30):
-                    embed = criar_embed_pre_alerta(nome, local, horario, timestamp_unix)
-                    await canal.send(embed=embed)
+                    embed_30 = discord.Embed(
+                        title=f"⚠️ PRÉ-ALERTA: {nome} em 30 minutos!",
+                        description=f"⏰ **Horário:** {horario}\n⏳ **Inicia:** <t:{timestamp_unix}:R>\n📍 **Local:** {local}",
+                        color=0x3498db
+                    )
+                    await canal.send(embed=embed_30)
                     estado[chave_30] = True
                     salvar_estado(estado)
 
-            # 2. ALERTA PRINCIPAL DE 10 MINUTOS (entre 0 e 600 segundos)
+            # Alerta principal de 10 minutos
             chave_10 = f"{nome}_{horario}_{data_str}_10"
             if 0 < diferenca <= 600:
                 if not estado.get(chave_10):
-                    embed = criar_embed_alerta(nome, local, horario, timestamp_unix)
+                    embed_10 = discord.Embed(
+                        title=f"🔥 BOSS {nome} NASCENDO EM BREVE! 🔥",
+                        description=f"⏰ **Horário:** {horario}\n⏳ **Tempo Restante:** <t:{timestamp_unix}:R>\n📍 **Local:** {local}\n\n*Corram para o local!*",
+                        color=0xffa500
+                    )
                     await canal.send(
                         content="@everyone",
-                        embed=embed,
+                        embed=embed_10,
                         allowed_mentions=discord.AllowedMentions(everyone=True)
                     )
                     estado[chave_10] = True
@@ -170,7 +226,7 @@ async def verificar_boss():
 
 @bot.event
 async def on_ready():
-    print(f"🛡️ Bot de Alertas online como {bot.user}")
+    print(f"🛡️ Bot de Alertas com Painel Contínuo online como {bot.user}")
     if not verificar_boss.is_running():
         verificar_boss.start()
 
