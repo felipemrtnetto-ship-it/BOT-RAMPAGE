@@ -16,7 +16,7 @@ TOKEN = os.getenv("TOKEN")
 if not TOKEN:
     raise ValueError("❌ TOKEN não configurado na variável de ambiente.")
 
-CANAL_NOME = "⚠️-alerta-dos-boss"
+CANAL_ID = 1570446068490043442  # ID oficial do canal de alerta
 TIMEZONE = pytz.timezone("America/Sao_Paulo")
 ARQUIVO_ESTADO = "estado.json"
 
@@ -27,23 +27,21 @@ lock = asyncio.Lock()
 ultimo_minuto_processado = None
 
 # ===============================
-# BOSSES
+# BOSSES (TABELA OFICIAL)
 # ===============================
 
 BOSSES = [
-    ("Galia Black", "10:45", "Lost Tower (165, 76)"),
-    ("Kundun", "13:10", "Kalima 6 - Lost Map +6"),
-    ("Kundun", "15:10", "Kalima 6 - Lost Map +6"),
-    ("Galia Black", "16:45", "Lost Tower (165, 76)"),
-    ("Blood Wizard", "18:10", "Devias ou /pvp2 (159,39)"),
-    ("Crusher Skeleton", "19:05", "Aleatório em Lorencia"),
-    ("Necromancer", "19:40", "Elbeland 2 ou /devias4 (30,39)"),
-    ("Selupan", "20:10", "Raklion ou /pvp4 (174,200)"),
-    ("Skull Reaper", "20:50", "Dungeon (91,236)"),
-    ("Gywen", "22:10", "Dungeon 3 (25,72)"),
-    ("HellMaine", "22:30", "Aida 2 (119,107)"),
-    ("Yorm", "23:40", "/lorencia1 (22,46)"),
-    ("Zorlak", "01:10", "Aleatório em Lorencia"),
+    ("Blood Wizard", "18:10", None, "Devias ou /pvp2 (159,39)"),
+    ("Crusher Skeleton", "19:05", None, "Aleatório em Lorencia"),
+    ("Necromancer", "19:40", None, "Elbeland 2 ou /devias4 (30,39)"),
+    ("Selupan", "20:10", None, "Raklion ou /pvp4 (174,200)"),
+    ("Galia Black", "20:30", None, "Lost Tower (165, 76)"),
+    ("Skull Reaper", "20:50", None, "Dungeon (91,236)"),
+    ("Gwyn, o Senhor das Cinzas", "22:10", None, "Dungeon 3 (25,72)"),
+    ("Hellmaine", "22:30", None, "Aida 2 (119,107)"),
+    ("Balgass", "23:00", [2, 5], "Crywolf / Local do Evento"), # Apenas Quarta (2) e Sábado (5)
+    ("Yhorm", "23:40", None, "/lorencia1 (22,46)"),
+    ("Zorlak", "01:10", None, "Aleatório em Lorencia"),
 ]
 
 # ===============================
@@ -63,14 +61,21 @@ def salvar_estado(estado):
 estado = carregar_estado()
 
 # ===============================
-# EMBED
+# EMBEDS
 # ===============================
 
-def criar_embed(nome, local, hora):
+def criar_embed_pre_alerta(nome, local, hora):
+    return discord.Embed(
+        title=f"⚠️ PRÉ-ALERTA: {nome} em 30 minutos!",
+        description=f"⏰ **Horário:** {hora}\n📍 **Local:** {local}\n\n*Preparem-se, o boss vai nascer em breve!*",
+        color=0x3498db  # Azul informativo
+    )
+
+def criar_embed_alerta(nome, local, hora):
     return discord.Embed(
         title=f"🔥 BOSS {nome} EM 10 MINUTOS! 🔥",
-        description=f"Horário - {hora}\nLocal - {local}",
-        color=0xffa500
+        description=f"⏰ **Horário:** {hora}\n📍 **Local:** {local}\n\n*Corram para o local!*",
+        color=0xffa500  # Laranja de urgência
     )
 
 # ===============================
@@ -95,11 +100,20 @@ async def verificar_boss():
             estado.clear()
             salvar_estado(estado)
 
-        canal = discord.utils.get(bot.get_all_channels(), name=CANAL_NOME)
+        canal = bot.get_channel(CANAL_ID)
         if not canal:
-            return
+            try:
+                canal = await bot.fetch_channel(CANAL_ID)
+            except discord.DiscordException:
+                return
 
-        for nome, horario, local in BOSSES:
+        for evento in BOSSES:
+            nome, horario, dias, local = evento
+
+            # Valida se o boss acontece no dia da semana atual
+            if dias is not None and agora.weekday() not in dias:
+                continue
+
             hora_boss = datetime.strptime(horario, "%H:%M")
             hora_boss = TIMEZONE.localize(
                 datetime(
@@ -115,20 +129,28 @@ async def verificar_boss():
                 hora_boss += timedelta(days=1)
 
             diferenca = (hora_boss - agora).total_seconds()
-            chave = f"{nome}_{horario}_10"
+            data_str = agora.strftime('%Y-%m-%d')
 
+            # 1. PRÉ-ALERTA DE 30 MINUTOS (entre 1740 e 1800 segundos)
+            chave_30 = f"{nome}_{horario}_{data_str}_30"
+            if 1740 <= diferenca <= 1800:
+                if not estado.get(chave_30):
+                    embed = criar_embed_pre_alerta(nome, local, horario)
+                    await canal.send(embed=embed)  # Sem @everyone no pré-alerta para não spammar tanto
+                    estado[chave_30] = True
+                    salvar_estado(estado)
+
+            # 2. ALERTA PRINCIPAL DE 10 MINUTOS (entre 0 e 600 segundos)
+            chave_10 = f"{nome}_{horario}_{data_str}_10"
             if 0 < diferenca <= 600:
-                if not estado.get(chave):
-
-                    embed = criar_embed(nome, local, horario)
-
+                if not estado.get(chave_10):
+                    embed = criar_embed_alerta(nome, local, horario)
                     await canal.send(
                         content="@everyone",
                         embed=embed,
                         allowed_mentions=discord.AllowedMentions(everyone=True)
                     )
-
-                    estado[chave] = True
+                    estado[chave_10] = True
                     salvar_estado(estado)
 
 # ===============================
@@ -137,7 +159,7 @@ async def verificar_boss():
 
 @bot.event
 async def on_ready():
-    print(f"🛡️ Bot online como {bot.user}")
+    print(f"🛡️ Bot de Alertas online como {bot.user}")
     if not verificar_boss.is_running():
         verificar_boss.start()
 
